@@ -1,0 +1,106 @@
+
+name: Build Snapmaker U1 Z Fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Snapmaker OrcaSlicer v2.4.1
+        uses: actions/checkout@v4
+        with:
+          repository: Snapmaker/OrcaSlicer
+          ref: bac6fd5c1e1c23ddf057cf6471ba4ed7ed621c4c
+          lfs: true
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply PR 967 Z collision fix
+        shell: bash
+        run: |
+          git fetch https://github.com/Snapmaker/OrcaSlicer.git pull/967/head
+          git cherry-pick 8aba449
+
+      - name: Verify source and patch
+        shell: bash
+        run: |
+          echo "Source revision:"
+          git log -2 --oneline
+          echo "Patch details:"
+          git show --stat --oneline HEAD
+          echo "Working tree:"
+          git status --short
+
+      - name: Download Git LFS files
+        shell: bash
+        run: |
+          git lfs install
+          git lfs pull
+
+      - name: Install build dependencies
+        shell: powershell
+        run: |
+          choco install strawberryperl -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Configure build script for VS2022
+        shell: powershell
+        run: |
+          $file = "build_release.bat"
+          $content = Get-Content $file -Raw
+
+          $content = $content.Replace(
+            "Visual Studio 16 2019",
+            "Visual Studio 17 2022"
+          )
+
+          $content = $content.Replace(
+            '-DWIN10SDK_PATH="C:/Program Files (x86)/Windows Kits/10/Include/10.0.19041.0"',
+            ""
+          )
+
+          Set-Content $file $content -Encoding ascii
+
+          Write-Host "Updated build_release.bat:"
+          Get-Content $file
+
+      - name: Build Snapmaker OrcaSlicer
+        shell: cmd
+        run: |
+          call build_release.bat
+          if errorlevel 1 exit /b 1
+
+      - name: Verify application output
+        shell: powershell
+        run: |
+          $output = "build/Snapmaker_Orca"
+
+          if (!(Test-Path $output)) {
+            throw "Application output directory not found: $output"
+          }
+
+          $executables = Get-ChildItem $output -Recurse -Filter *.exe
+
+          if ($executables.Count -eq 0) {
+            throw "No executable found in application output"
+          }
+
+          $executables | Select-Object FullName
+
+      - name: Upload Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Snapmaker-OrcaSlicer-2.4.1-U1-Z-Fix
+          path: build/Snapmaker_Orca/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
